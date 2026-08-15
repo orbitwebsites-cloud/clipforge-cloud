@@ -1524,7 +1524,57 @@ function ProfilePanel({ data }: { data: DashboardData }) {
       <div className="profile-clerk">
         <UserProfile routing="hash" />
       </div>
+      <DeleteAccountCard />
     </section>
+  );
+}
+
+function DeleteAccountCard() {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+
+  async function deleteAccount() {
+    setDeleting(true);
+    setError('');
+    const response = await fetch('/api/account', { method: 'DELETE' });
+    if (response.ok) { window.location.href = '/'; return; }
+    const body = await response.json().catch(() => ({}));
+    setDeleting(false);
+    setError(body.error || 'Your account could not be deleted. Try again or email support.');
+  }
+
+  return (
+    <article className="cancel-card" style={{ width: '100%', maxWidth: '62rem', margin: '1.5rem auto 0' }}>
+      <div>
+        <span className="cancel-icon">
+          <Trash2 />
+        </span>
+        <div>
+          <h3>Delete account and all data</h3>
+          <p>
+            Permanently revokes your connected Google/YouTube access, deletes every
+            source channel, job, clip record, and preference we store for you, and
+            removes your sign-in account. This cannot be undone.{' '}
+            {error && <b style={{ color: '#b85a4a' }}>{error}</b>}
+          </p>
+        </div>
+      </div>
+      {confirming ? (
+        <div style={{ display: 'flex', gap: '.5rem' }}>
+          <button type="button" className="button button-ghost" onClick={() => setConfirming(false)} disabled={deleting}>
+            Cancel
+          </button>
+          <button type="button" className="button button-primary" onClick={deleteAccount} disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Confirm permanent deletion'}
+          </button>
+        </div>
+      ) : (
+        <button type="button" className="button button-ghost" onClick={() => setConfirming(true)}>
+          Delete my account <Trash2 />
+        </button>
+      )}
+    </article>
   );
 }
 

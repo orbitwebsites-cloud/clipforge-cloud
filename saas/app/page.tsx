@@ -74,7 +74,7 @@ export default function HomePage() {
         <div className="creator-benefits"><article><b>5×</b><h3>More sources</h3><p>Monitor your main channel, stream archive, podcast, and collaborator channels from one dashboard.</p></article><article><b>15×</b><h3>More monthly output</h3><p>Move from 10 free Shorts to as many as 150 published Shorts every month.</p></article><article><b>&lt;3h</b><h3>Priority delivery target</h3><p>Creator jobs move ahead of the standard queue so timely uploads stay timely.</p></article></div>
         <Link className="button button-primary button-large" href="/sign-up">Put My Channel on Autopilot <ArrowRight size={18} /></Link>
       </section>
-      <footer><span>© 2026 ClipForge Cloud</span><span>Built around YouTube’s official OAuth and push APIs.</span></footer>
+      <footer><span>© 2026 ClipForge Cloud</span><span><Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy</Link> · <Link href="/data-deletion">Data deletion</Link> · <a href="mailto:support@klippdstudio.com">Support</a></span></footer>
     </main>
   );
 }

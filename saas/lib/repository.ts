@@ -58,6 +58,24 @@ export async function ensureTenant(id: string, profile: { email: string; name: s
 
 const complimentaryCreatorEmails = () => new Set((process.env.COMPLIMENTARY_CREATOR_EMAILS || '').split(',').map((email) => email.trim().toLowerCase()).filter(Boolean));
 
+export async function tenantRefreshTokens(tenantId: string) {
+  if (!databaseEnabled()) return demoStore().channels.filter((channel) => channel.tenantId === tenantId).map((channel) => channel.refreshTokenEncrypted);
+  const result = await query<{ refresh_token_encrypted: string }>('select refresh_token_encrypted from channels where tenant_id=$1', [tenantId]);
+  return result.rows.map((row) => row.refresh_token_encrypted);
+}
+
+export async function deleteTenant(tenantId: string) {
+  if (!databaseEnabled()) {
+    const store = demoStore();
+    store.tenants = store.tenants.filter((tenant) => tenant.id !== tenantId);
+    store.channels = store.channels.filter((channel) => channel.tenantId !== tenantId);
+    store.sourceChannels = store.sourceChannels.filter((source) => source.tenantId !== tenantId);
+    store.jobs = store.jobs.filter((job) => job.tenantId !== tenantId);
+    return;
+  }
+  await query('delete from tenants where id=$1', [tenantId]);
+}
+
 async function resetMonthlyUsage(tenantId?: string) {
   if (!databaseEnabled()) return;
   await query(`update tenants set clips_this_month=0,usage_month=date_trunc('month',now())::date

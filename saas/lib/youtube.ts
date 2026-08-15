@@ -21,6 +21,11 @@ export async function exchangeCode(code: string) {
   return body as { access_token: string; refresh_token?: string };
 }
 
+export async function revokeGoogleToken(token: string) {
+  const response = await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+  return response.ok || response.status === 400;
+}
+
 export async function refreshGoogleAccessToken(refreshToken: string) {
   const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID || '', client_secret: process.env.GOOGLE_CLIENT_SECRET || '', refresh_token: refreshToken, grant_type: 'refresh_token' }) });
   const body = await response.json();
