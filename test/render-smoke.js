@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { ffmpeg, probe, ensureDir } from '../src/ffmpeg.js';
-import { renderClip } from '../src/render.js';
+import { renderClip, concatClips } from '../src/render.js';
 import { ROOT } from '../src/config.js';
 
 const work = ensureDir(path.join(ROOT, 'work', '_smoke'));
@@ -34,16 +34,24 @@ async function main() {
   const clip = { start: 1, end: 13, title: 'Smoke Test Clip', score: 99, reason: 'synthetic' };
 
   const results = [];
+  const rendered = [];
   for (const [i, reframe] of ['blur', 'center'].entries()) {
     const r = await renderClip(src, { ...clip, title: `${reframe} mode` }, i, meta, {
       outDir: out, workDir: work, words, captions: true, reframe, preset: 'ultrafast',
       log: (m) => console.log(m),
     });
+    rendered.push(r);
     const m = await probe(r.file);
     const pass = m.width === 1080 && m.height === 1920 && m.hasAudio && m.duration > 11;
     console.log(`  verify ${reframe}: ${m.width}x${m.height} ${m.duration.toFixed(1)}s audio=${m.hasAudio} -> ${pass ? 'PASS' : 'FAIL'}`);
     results.push(pass);
   }
+
+  const compiled = await concatClips(rendered.map((r) => r.file), out, { log: (m) => console.log(m) });
+  const mc = await probe(compiled);
+  const compilePass = mc.width === 1080 && mc.height === 1920 && mc.hasAudio && mc.duration > 23;
+  console.log(`  verify compilation: ${mc.width}x${mc.height} ${mc.duration.toFixed(1)}s audio=${mc.hasAudio} -> ${compilePass ? 'PASS' : 'FAIL'}`);
+  results.push(compilePass);
 
   const noCap = await renderClip(src, { ...clip, title: 'no captions' }, 2, meta, {
     outDir: out, workDir: work, words: [], captions: false, reframe: 'blur', preset: 'ultrafast',

@@ -64,34 +64,37 @@ export function extractJson(text) {
   throw new Error(`Unterminated JSON in model response:\n${text.slice(0, 400)}`);
 }
 
-const SYSTEM = `You find viral short-form clips inside long Minecraft SMP videos.
+const DEFAULT_NICHE = 'long-form video (any topic or format)';
+
+function buildSystemPrompt(niche = '') {
+  const subject = niche ? niche.trim() : DEFAULT_NICHE;
+  return `You find viral short-form clips inside ${subject} videos.
 Target: clips that stop scrollers on YouTube Shorts, get rewatched, and hit 10k+ views.
 
 NON-NEGOTIABLE RULES (violating any = score 0):
-1. The clip must open on VISIBLE PHYSICAL ACTION in the first 0.5 seconds — a sword swing,
-   explosion, chase, fall, build reveal, or player in clear danger. NEVER open on someone
-   talking to camera or explaining context. The first FRAME is the thumbnail.
+1. The clip must open on something that grabs attention in the first 0.5 seconds — visible
+   action, a striking visual, a surprising statement, or a clear stake being set. NEVER open on
+   someone easing into a topic or giving throat-clearing context. The first FRAME is the thumbnail.
 2. Never start mid-sentence or on filler ("so", "um", "and yeah", "okay so").
-3. Never end mid-sentence. End on a punchline, elimination sound, clutch moment, or clear result.
+3. Never end mid-sentence. End on a punchline, payoff, clutch moment, or clear result.
 4. Clip must make complete sense to someone who has NEVER seen the channel before.
 5. Clip length must be between {MIN} and {MAX} seconds.
 
 SCORING FACTORS (what earns a high score):
-  +++ Ambush or counter-ambush — clear aggressor and target, immediate danger
-  +++ Clutch escape — player is about to die, finds a way out in real time
-  +++ Betrayal at a critical moment — base, items, or trust at stake
-  +++ Timed contest — visible timer or countdown, outcome unclear until last second
-  +++ Trap reveal — secret setup paid off in one satisfying moment
-  +++ Strong reaction — genuine surprise/rage/celebration is the whole point
-  ++ Elimination that changes server power balance
-  ++ Build or redstone reveal with clear before/after
+  +++ A clear conflict, contest, or unresolved question with a visible/audible stakes
+  +++ A turn — reversal, reveal, escape, or realization — that lands in real time
+  +++ Something at risk (a bet, a relationship, an outcome, a build, a trust)
+  +++ A ticking clock or countdown where the outcome is unclear until the last second
+  +++ A setup that pays off in one satisfying moment
+  +++ A strong, genuine reaction — surprise, rage, celebration — that is the whole point
+  ++ A moment that changes the state of the video's world (score, standing, relationship)
+  ++ A concrete before/after reveal
 
 NEVER nominate:
-  - Pure dialogue with no on-screen stakes (even if the words sound dramatic)
-  - Revenge-story framing ("he betrayed me so I...") — no action visible
-  - Setup clips that only make sense if you know the server lore
+  - Pure exposition with no stakes (even if the words sound dramatic)
+  - Setup clips that only make sense if you already know prior context
   - Clips starting on someone explaining what they are ABOUT to do
-  - Intros, outros, sponsor reads, stream downtime
+  - Intros, outros, sponsor reads, dead air
 
 TITLE RULES (3-7 words):
   - Name the SPECIFIC conflict or challenge, not the category
@@ -102,6 +105,7 @@ TITLE RULES (3-7 words):
 Return ONLY a JSON array. Each element:
 {"start":"M:SS","end":"M:SS","title":"punchy 3-7 word hook","score":0-100,"reason":"why this works — specifically mention what the opening visual is"}
 Order by score, best first. No prose outside the JSON.`;
+}
 
 function buildTranscript(segments) {
   return segments.map((s) => `[${ts(s.start)}] ${s.text}`).join('\n');
@@ -153,7 +157,7 @@ function windows(text) {
   return out;
 }
 
-async function askCerebras(transcript, count, min, max, log = () => {}, critique = null, performanceBrief = '') {
+async function askCerebras(transcript, count, min, max, log = () => {}, critique = null, performanceBrief = '', niche = '') {
   const preamble = [
     performanceBrief ? `This channel's recent performance signals:\n${performanceBrief}\nUse these signals as evidence, but never copy a title or force a weak match.` : '',
     critique ? `Evaluator feedback on the previous attempt:\n${critique}\nUse this to find DIFFERENT and BETTER moments.` : '',
@@ -163,7 +167,7 @@ async function askCerebras(transcript, count, min, max, log = () => {}, critique
       temperature: 0.3,
       max_completion_tokens: 4000,
       messages: [
-        { role: 'system', content: SYSTEM.replace('{MIN}', min).replace('{MAX}', max) },
+        { role: 'system', content: buildSystemPrompt(niche).replace('{MIN}', min).replace('{MAX}', max) },
         {
           role: 'user',
           content: `${preamble ? `${preamble}\n\n` : ''}Find up to ${count} clips in this transcript.\n\n<transcript>\n${transcript}\n</transcript>`,
@@ -183,13 +187,13 @@ Goal: pick the clips most likely to stop scrollers, get rewatched, and hit 10k+ 
 Existing scores are from isolated windows and are NOT comparable. Ignore them.
 Re-judge every candidate on one consistent scale.
 
-PRIMARY RANK FACTOR — visual opening (counts 35%):
-  Does the clip's stated opening timestamp land on visible physical action?
-  Ambush, sword swing, explosion, chase, fall, build reveal = high rank.
-  Talking head, context explanation, walking = heavily penalised.
+PRIMARY RANK FACTOR — opening hook (counts 35%):
+  Does the clip's stated opening timestamp land on something that grabs attention —
+  action, a striking visual, a bold claim, a stake being set? High rank.
+  Slow build-up, context explanation, throat-clearing = heavily penalised.
 
 OTHER RANK FACTORS:
-  - Stakes clear in <2 seconds without SMP lore knowledge
+  - Stakes clear in <2 seconds without needing prior context
   - Tension escalates continuously — no dead air
   - Strong ending: elimination, escape, reveal, or reaction
   - Rewatchability: a twist or near-miss that rewards a second view
@@ -347,13 +351,13 @@ const pace = (i, total) =>
 export async function findHighlights(
   { segments },
   duration,
-  { count = 5, min = 15, max = 75, log = () => {}, critique = null, performanceBrief = '' } = {}
+  { count = 5, min = 15, max = 75, log = () => {}, critique = null, performanceBrief = '', niche = '' } = {}
 ) {
   // Cache key: transcript content + generation params + critique (feedback changes output).
   // performanceBrief is deliberately excluded — it's advisory and we don't want channel
   // stats to cause a cache miss when nothing meaningful about the clip changed.
   const transcript = buildTranscript(segments);
-  const analysisKey = cache.contentKey(transcript, String(count), String(min), String(max), critique || '');
+  const analysisKey = cache.contentKey(transcript, String(count), String(min), String(max), critique || '', niche || '');
   const cachedClips = cache.get('analysis', analysisKey);
   if (cachedClips) {
     log(`  analysis cache hit (${cachedClips.length} clips) — skipped Cerebras calls`);
@@ -373,7 +377,7 @@ export async function findHighlights(
     // ranking with nothing to choose between.
     const perWindow = chunks.length > 1 ? Math.max(6, Math.ceil((count * 3) / chunks.length) + 2) : count + 3;
     try {
-      candidates.push(...(await askCerebras(chunk, perWindow, min, max, log, i === 0 ? critique : null, i === 0 ? performanceBrief : '')));
+      candidates.push(...(await askCerebras(chunk, perWindow, min, max, log, i === 0 ? critique : null, i === 0 ? performanceBrief : '', niche)));
     } catch (err) {
       log(`  ! window ${i + 1} failed: ${err.message.split('\n')[0]}`);
     }

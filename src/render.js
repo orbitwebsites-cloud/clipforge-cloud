@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync } from 'node:fs';
+import { copyFileSync, existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { paths } from './config.js';
 import { ffmpeg, ensureDir } from './ffmpeg.js';
@@ -131,4 +131,21 @@ export async function renderClip(input, clip, index, meta, opts = {}) {
 
   log(`  -> ${name}  (${duration.toFixed(1)}s, score ${clip.score})`);
   return { file: outFile, name, ...clip };
+}
+
+/**
+ * Stitch already-rendered clips (identical codec/resolution, since they all
+ * came out of renderClip above) into one file via ffmpeg's concat demuxer.
+ * Stream-copied — no re-encode — since every input already matches.
+ */
+export async function concatClips(files, outDir, opts = {}) {
+  const { name = 'compilation.mp4', log = () => {} } = opts;
+  ensureDir(outDir);
+  const listFile = path.join(outDir, 'concat-list.txt');
+  const listBody = files.map((f) => `file '${path.resolve(f).replace(/'/g, "'\\''")}'`).join('\n');
+  writeFileSync(listFile, listBody);
+  const outFile = path.join(outDir, name);
+  await ffmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', outFile]);
+  log(`  -> ${name}  (compiled from ${files.length} clips)`);
+  return outFile;
 }

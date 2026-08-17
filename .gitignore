@@ -12,3 +12,5 @@ saas/worker-data/
 saas/*.tsbuildinfo
 reports/
 tmp/
+
+.vercel

@@ -5,11 +5,14 @@ import { tenantIdFromSession } from '@/lib/session';
 const schema = z.object({
   publishMode: z.enum(['automatic', 'review']),
   clipsPerVideo: z.number().int().min(1).max(5),
-  minClipSeconds: z.number().int().min(10).max(30),
-  maxClipSeconds: z.number().int().min(15).max(60),
+  minClipSeconds: z.number().int().min(10).max(170),
+  // 180s matches YouTube Shorts' current maximum duration.
+  maxClipSeconds: z.number().int().min(15).max(180),
   captionStyle: z.enum(['impact', 'clean', 'minimal']),
   brandColor: z.string().regex(/^#[0-9a-f]{6}$/i),
   hashtags: z.string().trim().max(160),
+  outputMode: z.enum(['shorts', 'compilation']),
+  contentNiche: z.string().trim().max(200),
   learningEnabled: z.boolean(),
   autoDeleteEnabled: z.boolean(),
   autoDeleteMinViews: z.number().int().min(1).max(100000),

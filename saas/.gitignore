@@ -5,3 +5,4 @@ coverage/
 worker-data/
 
 .vercel
+.env*

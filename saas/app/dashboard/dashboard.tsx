@@ -1762,7 +1762,7 @@ function SettingsPanel({
                     update('minClipSeconds', Number(event.target.value))
                   }
                 >
-                  {[10, 15, 20, 25, 30]
+                  {[10, 15, 20, 25, 30, 45, 60, 90, 120, 150]
                     .filter((value) => value < preferences.maxClipSeconds)
                     .map((value) => (
                       <option key={value} value={value}>
@@ -1779,7 +1779,7 @@ function SettingsPanel({
                     update('maxClipSeconds', Number(event.target.value))
                   }
                 >
-                  {[20, 25, 32, 40, 50, 60]
+                  {[20, 25, 32, 40, 50, 60, 90, 120, 150, 180]
                     .filter((value) => value > preferences.minClipSeconds)
                     .map((value) => (
                       <option key={value} value={value}>
@@ -1789,6 +1789,38 @@ function SettingsPanel({
                 </select>
               </label>
             </div>
+          </fieldset>
+          <fieldset>
+            <legend>
+              <Rocket /> Output format
+            </legend>
+            <div className="choice-cards">
+              <button
+                type="button"
+                className={preferences.outputMode === 'shorts' ? 'selected' : ''}
+                onClick={() => update('outputMode', 'shorts')}
+              >
+                <b>Individual Shorts</b>
+                <span>Upload every selected clip as its own Short.</span>
+              </button>
+              <button
+                type="button"
+                className={preferences.outputMode === 'compilation' ? 'selected' : ''}
+                onClick={() => update('outputMode', 'compilation')}
+              >
+                <b>Compiled long-form</b>
+                <span>Stitch the selected clips into one longer video and upload that instead.</span>
+              </button>
+            </div>
+            <label className="field-row">
+              Content niche (optional)
+              <input
+                type="text"
+                value={preferences.contentNiche}
+                onChange={(event) => update('contentNiche', event.target.value)}
+                placeholder="e.g. true crime commentary, cooking tutorials, gaming podcast clips"
+              />
+            </label>
           </fieldset>
           <fieldset>
             <legend>
@@ -1829,7 +1861,7 @@ function SettingsPanel({
                   type="text"
                   value={preferences.hashtags}
                   onChange={(event) => update('hashtags', event.target.value)}
-                  placeholder="#Shorts #Minecraft"
+                  placeholder="#Shorts"
                 />
               </label>
             </div>

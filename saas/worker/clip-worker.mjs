@@ -18,7 +18,7 @@ for (const name of ['.env.local', '.env']) {
   }
 }
 
-const [{ download, ytdlpVersion }, { probe, ensureDir }, { transcribe }, { findHighlights }, { evaluateClips }, { renderClip }, { uploadVideo }] = await Promise.all([
+const [{ download, ytdlpVersion }, { probe, ensureDir }, { transcribe }, { findHighlights }, { evaluateClips }, { renderClip, concatClips }, { uploadVideo }] = await Promise.all([
   import('../../src/download.js'), import('../../src/ffmpeg.js'), import('../../src/transcribe.js'), import('../../src/analyze.js'), import('../../src/evaluate.js'), import('../../src/render.js'), import('../../src/youtube.js'),
 ]);
 
@@ -99,7 +99,7 @@ async function selectClips(transcript, duration, log, job) {
   let critique = null;
   let best = [];
   for (let attempt = 0; attempt < 2; attempt++) {
-    const candidates = await findHighlights(transcript, duration, { count: Math.max(5, preferences.clipsPerVideo), min: preferences.minClipSeconds, max: preferences.maxClipSeconds, log, critique, performanceBrief: performanceBrief(job) });
+    const candidates = await findHighlights(transcript, duration, { count: Math.max(5, preferences.clipsPerVideo), min: preferences.minClipSeconds, max: preferences.maxClipSeconds, log, critique, performanceBrief: performanceBrief(job), niche: preferences.contentNiche || '' });
     const evaluation = await evaluateClips(candidates, { log });
     if (evaluation.passing.length > best.length) best = evaluation.passing;
     if (evaluation.verdict === 'PASS') break;
@@ -112,7 +112,7 @@ async function processJob(job) {
   const log = (message = '') => console.log(`[${job.id.slice(0, 8)}] ${message}`);
   const workDir = ensureDir(path.join(engineRoot, 'work', 'saas', job.tenantId, job.id));
   const outDir = ensureDir(path.join(engineRoot, 'out', 'saas', job.tenantId, job.id));
-  const preferences = { publishMode: 'automatic', clipsPerVideo: 3, minClipSeconds: 15, maxClipSeconds: 32, captionStyle: 'impact', brandColor: '#C8FF38', hashtags: '#Shorts #Minecraft', learningEnabled: true, ...(job.preferences || {}) };
+  const preferences = { publishMode: 'automatic', clipsPerVideo: 3, minClipSeconds: 15, maxClipSeconds: 32, captionStyle: 'impact', brandColor: '#C8FF38', hashtags: '#Shorts', outputMode: 'shorts', contentNiche: '', learningEnabled: true, ...(job.preferences || {}) };
   try {
     await progress(job, 'downloading', 8);
     const source = await download(job.sourceUrl, path.join(workDir, 'download'), { log });
@@ -128,26 +128,44 @@ async function processJob(job) {
     for (const [index, clip] of clips.entries()) rendered.push(await renderClip(source.file, clip, index, meta, { outDir, workDir, words: transcript.words, captions: true, captionStyle: captionStyle(preferences), reframe: 'blur', log }));
     await progress(job, 'uploading', 84);
     const { accessToken } = await api('/api/worker/youtube-token', { channelId: job.channelId });
-    const uploaded = [];
-    const failedClips = [];
     const hashtags = tagsFrom(preferences);
     const requestedPrivacy = preferences.publishMode === 'review' ? 'private' : 'public';
-    for (const clip of rendered) {
-      const meta = { title: clip.title, description: `${clip.title}\n\n${hashtags.line}`, tags: hashtags.values, privacyStatus: requestedPrivacy };
-      try {
-        const result = await uploadWithRetry(clip.file, meta, { token: accessToken, log }, log);
-        uploaded.push({ title: clip.title, durationSeconds: Number((clip.end - clip.start).toFixed(2)), youtubeVideoId: result.id, youtubeUrl: result.shortUrl, privacyStatus: result.privacyStatus === 'public' ? 'public' : 'private' });
-      } catch (error) {
-        // One clip exhausting its retries must not discard clips that already
-        // uploaded, or clips still waiting their turn — keep going.
-        const message = error instanceof Error ? error.message : String(error);
-        log(`  ! giving up on "${clip.title}" after retries: ${message}`);
-        failedClips.push({ title: clip.title, error: message });
+
+    if (preferences.outputMode === 'compilation') {
+      const compiledFile = await concatClips(rendered.map((c) => c.file), outDir, { log });
+      const title = `${job.sourceTitle || 'Highlights'} — ${rendered.length} best moments`.slice(0, 95);
+      const description = `${rendered.map((c) => `• ${c.title}`).join('\n')}\n\n${hashtags.line}`;
+      const meta = { title, description, tags: hashtags.values, privacyStatus: requestedPrivacy };
+      const result = await uploadWithRetry(compiledFile, meta, { token: accessToken, log }, log);
+      const uploaded = [{
+        title,
+        durationSeconds: Number(rendered.reduce((sum, c) => sum + (c.end - c.start), 0).toFixed(2)),
+        youtubeVideoId: result.id,
+        youtubeUrl: result.shortUrl,
+        privacyStatus: result.privacyStatus === 'public' ? 'public' : 'private',
+      }];
+      await api('/api/worker/complete', { jobId: job.id, workerId, clips: uploaded });
+      log(`complete: compiled ${rendered.length} clips into 1 long-form video`);
+    } else {
+      const uploaded = [];
+      const failedClips = [];
+      for (const clip of rendered) {
+        const meta = { title: clip.title, description: `${clip.title}\n\n${hashtags.line}`, tags: hashtags.values, privacyStatus: requestedPrivacy };
+        try {
+          const result = await uploadWithRetry(clip.file, meta, { token: accessToken, log }, log);
+          uploaded.push({ title: clip.title, durationSeconds: Number((clip.end - clip.start).toFixed(2)), youtubeVideoId: result.id, youtubeUrl: result.shortUrl, privacyStatus: result.privacyStatus === 'public' ? 'public' : 'private' });
+        } catch (error) {
+          // One clip exhausting its retries must not discard clips that already
+          // uploaded, or clips still waiting their turn — keep going.
+          const message = error instanceof Error ? error.message : String(error);
+          log(`  ! giving up on "${clip.title}" after retries: ${message}`);
+          failedClips.push({ title: clip.title, error: message });
+        }
       }
+      if (!uploaded.length) throw new Error(`All ${rendered.length} clip upload(s) failed: ${failedClips.map((f) => f.error).join('; ')}`);
+      await api('/api/worker/complete', { jobId: job.id, workerId, clips: uploaded });
+      log(`complete: ${uploaded.length}/${rendered.length} Shorts published${failedClips.length ? ` (${failedClips.length} failed after retries — rendered but not uploaded)` : ''}`);
     }
-    if (!uploaded.length) throw new Error(`All ${rendered.length} clip upload(s) failed: ${failedClips.map((f) => f.error).join('; ')}`);
-    await api('/api/worker/complete', { jobId: job.id, workerId, clips: uploaded });
-    log(`complete: ${uploaded.length}/${rendered.length} Shorts published${failedClips.length ? ` (${failedClips.length} failed after retries — rendered but not uploaded)` : ''}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[${job.id}] ${message}`);

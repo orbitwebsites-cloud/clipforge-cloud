@@ -57,6 +57,10 @@ export type CreatorPreferences = {
   captionStyle: 'impact' | 'clean' | 'minimal';
   brandColor: string;
   hashtags: string;
+  /** 'shorts': upload each clip individually (default). 'compilation': stitch the selected clips into one longer video and upload that instead. */
+  outputMode: 'shorts' | 'compilation';
+  /** Free-text description of the channel's content, used to steer highlight selection away from the Minecraft-SMP-tuned default. Empty = generic long-form video. */
+  contentNiche: string;
   learningEnabled: boolean;
   autoDeleteEnabled: boolean;
   autoDeleteMinViews: number;
