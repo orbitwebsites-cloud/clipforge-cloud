@@ -8,8 +8,25 @@ const YTDLP_RUNTIME_ARGS = ['--js-runtimes', `node:${process.execPath}`];
 const potServerHome = process.env.CFC_YTDLP_POT_SERVER_HOME;
 if (potServerHome) {
   YTDLP_RUNTIME_ARGS.push('--extractor-args', `youtubepot-bgutilscript:server_home=${potServerHome}`);
-  YTDLP_RUNTIME_ARGS.push('--extractor-args', 'youtube:player-client=mweb');
+  // mweb alone bot-checks under load on flagged datacenter IPs; tv rarely
+  // needs a PO token at all, so list it as a fallback client rather than
+  // relying on mweb succeeding every time. yt-dlp tries each in order and
+  // keeps the first that returns playable formats.
+  //
+  // player_skip=webpage: the "Sign in to confirm you're not a bot" failure
+  // we're actually hitting on Render fires on yt-dlp's initial watch-page
+  // HTML fetch, before player-client selection is even consulted. Skipping
+  // that fetch and going straight to the innertube API (what mweb/tv use
+  // anyway) avoids that specific request entirely instead of retrying it.
+  YTDLP_RUNTIME_ARGS.push('--extractor-args', 'youtube:player-client=mweb,tv;player_skip=webpage');
 }
+
+// Datacenter egress IPs (Render, AWS, GCP, ...) get YouTube-side rate limits
+// and bot-checks that no amount of cookies or PO tokens fully clears — the
+// durable fix is routing yt-dlp's traffic through a residential/rotating
+// proxy. Wire it through when configured; a no-op otherwise.
+const proxy = process.env.CFC_YTDLP_PROXY;
+if (proxy) YTDLP_RUNTIME_ARGS.push('--proxy', proxy);
 
 /**
  * Browser to lift YouTube cookies from, or `none` to send none.
@@ -36,6 +53,58 @@ if (cookiesFile) {
   YTDLP_RUNTIME_ARGS.push('--cookies-from-browser', cookieBrowser);
 }
 
+const RETRYABLE = /HTTP Error 429|Too Many Requests|Sign in to confirm/i;
+
+/**
+ * Minimum gap between yt-dlp invocations, shared across every job this
+ * worker process handles — not just retries within one job.
+ *
+ * A backlog of failing jobs used to burn through a dozen video IDs in under
+ * a minute: each job fails fast (no real download time consumed), so the
+ * poll loop immediately leases and tries the next one. That burst pattern
+ * looks more bot-like to YouTube than the per-job backoff alone accounts
+ * for. This gate makes every yt-dlp call — across all jobs — wait for the
+ * cooldown, and a 429 stretches everyone's next wait, not just the job that
+ * hit it.
+ */
+const BASE_PACE_MS = Number(process.env.CFC_YTDLP_PACE_MS || 5000);
+const RATE_LIMIT_COOLDOWN_MS = Number(process.env.CFC_YTDLP_RATE_LIMIT_COOLDOWN_MS || 45000);
+let nextCallAt = 0;
+
+async function paceYtdlp() {
+  const wait = nextCallAt - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  nextCallAt = Date.now() + BASE_PACE_MS;
+}
+
+/**
+ * yt-dlp calls fail transiently under YouTube rate limiting even with a POT
+ * token configured — a 429 is a "back off", not a permanent block. Retry
+ * with a real cooldown (YouTube's window is tens of seconds, not ms) before
+ * surfacing the error.
+ */
+async function runYtdlp(args, opts, { log = () => {}, tries = 4 } = {}) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    await paceYtdlp();
+    try {
+      return await run(PY, ['-m', 'yt_dlp', ...args], opts);
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!RETRYABLE.test(message) || i === tries - 1) throw err;
+      // Push every future call (this job's retries AND the next job's first
+      // attempt) further out, not just this one — a shared 429 means the IP
+      // is in the penalty box, not this one video.
+      nextCallAt = Math.max(nextCallAt, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+      const wait = Math.min(2 ** i * 20000, 120000);
+      log(`  ! yt-dlp rate-limited — retrying in ${wait / 1000}s`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  throw lastErr;
+}
+
 export async function ytdlpVersion() {
   try {
     const { out } = await run(PY, ['-m', 'yt_dlp', '--version']);
@@ -58,7 +127,7 @@ export async function download(url, workDir, { log = () => {}, maxHeight = 1080 
     ? `b[height<=${maxHeight}][vcodec!=none][acodec!=none]/b[vcodec!=none][acodec!=none]`
     : `bv*[height<=${maxHeight}]+ba/b[height<=${maxHeight}]/bv*+ba/b`;
 
-  const { out: titleOut } = await run(PY, ['-m', 'yt_dlp', ...YTDLP_RUNTIME_ARGS, '--no-playlist', '--print', '%(title)s', '--skip-download', url]);
+  const { out: titleOut } = await runYtdlp([...YTDLP_RUNTIME_ARGS, '--no-playlist', '--print', '%(title)s', '--skip-download', url], undefined, { log });
   const title = titleOut.trim().split('\n').pop() || 'video';
   log(`  "${title}"`);
 
@@ -71,10 +140,9 @@ export async function download(url, workDir, { log = () => {}, maxHeight = 1080 
     return { file: cached, title };
   }
 
-  await run(
-    PY,
+  await runYtdlp(
     [
-      '-m', 'yt_dlp', ...YTDLP_RUNTIME_ARGS,
+      ...YTDLP_RUNTIME_ARGS,
       '--no-playlist',
       '--no-progress',
       '-f', format,
@@ -85,7 +153,8 @@ export async function download(url, workDir, { log = () => {}, maxHeight = 1080 
       '-o', path.join(dir, 'source.%(ext)s'),
       url,
     ],
-    { quiet: true }
+    { quiet: true },
+    { log }
   );
 
   const files = readdirSync(dir).filter((f) => /\.(mp4|mkv|webm|mov)$/i.test(f));
