@@ -806,7 +806,18 @@ function JobsPanel({
                 <span>
                   <i style={{ width: job.status === 'failed' ? '0%' : `${job.progress}%` }} />
                 </span>
-                <small>{job.status === 'failed' ? 'Failed' : `${job.progress}%`}</small>
+                <small>
+                  {job.status === 'failed' ? (
+                    'Failed'
+                  ) : ['queued', 'complete'].includes(job.status) ? (
+                    `${job.progress}%`
+                  ) : (
+                    <>
+                      <LoaderCircle size={12} style={{ display: 'inline', marginRight: '4px' }} className="spin" />
+                      {job.progress}%
+                    </>
+                  )}
+                </small>
               </div>
               <strong>
                 {job.clips.length} clip{job.clips.length === 1 ? '' : 's'}
